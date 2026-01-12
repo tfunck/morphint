@@ -1,6 +1,6 @@
 # morphint
 ### Purpose
-Interpolation between 2D brain sections within a brain volume.
+Create continiuous 3D brain image from sparsely sampled 2D coronal sections using non-linear alignment with ANTs.
 
 ### About
 ![morphint](images/Morphint.jpg)
