@@ -1,5 +1,5 @@
 # morphint
-(morphint)[images/Morphint.jpg]
+[morphint](images/Morphint.jpg)
 ### Purpose
 Interpolation between 2D brain sections within a brain volume.
 
