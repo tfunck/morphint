@@ -495,7 +495,7 @@ def resample_interp_vol_to_resolution(
         )
 
 
-def morph_int(
+def morphint(
     ii_fin: str,
     curr_output_dir: str,
     resolution: float,
