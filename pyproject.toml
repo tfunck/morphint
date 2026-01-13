@@ -5,10 +5,10 @@ description = "Interpolation of 3D brain volume from 2D sections"
 authors = ["Thomas Funck <thomas.funck@childmind.org>"]
 license = "LGPL-2.1"
 readme = "README.md"
-packages = [{include = "brainbuilder", from = "./"}]
+packages = [{include = "morphint", from = "./"}]
 
 [tool.poetry.dependencies]
-python = ">3.11"
+python = ">3.8"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.4"

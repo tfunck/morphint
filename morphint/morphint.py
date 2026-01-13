@@ -8,7 +8,7 @@ import numpy as np
 from joblib import Parallel, delayed
 from skimage.transform import resize
 
-#import brainbuilder.utils.ants_nibabel as nib
+import morphint.ants_nibabel as nib
 
 
 def scale_displacement_field(

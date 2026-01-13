@@ -10,8 +10,10 @@ if __name__ == "__main__":
     clobber = True
     input_http_path = "https://ftp.bigbrainproject.org/bigbrain-ftp/BigBrainRelease.2015/3D_Volumes/MNI-ICBM152_Space/nii/full16_200um_2009b_sym.nii.gz"
 
+    sampling_rate = 3
 
     tmp_dir = "/tmp/brainbuilder_test_data"
+    os.makedirs(tmp_dir, exist_ok=True)
 
     input_local_path = f"{tmp_dir}/full16_200um_2009b_sym.nii.gz"
 
@@ -23,7 +25,6 @@ if __name__ == "__main__":
     img = nib.load(input_local_path)
     ar = np.array(img.dataobj, dtype=np.uint8)
 
-    sampling_rate = 3
 
     # keep evevy one in sampling rate y sections, set rest to zero
     reduced_ar = np.zeros_like(ar)
