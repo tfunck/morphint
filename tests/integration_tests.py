@@ -34,7 +34,7 @@ if __name__ == "__main__":
     reduced_img.to_filename(reduced_filename)
 
 
-    interp_filename, _ =morphint(reduced_filename, tmp_dir, 0.4, [3,2,1,0.8,0.4], clobber=clobber)
+    interp_filename, _ = morphint(reduced_filename, tmp_dir, 0.4, [3,2,1,0.8,0.4], clobber=clobber)
 
     # Calculate correlation between original and interpolated data in the missing sections
     interp_img = nib.load(interp_filename)
