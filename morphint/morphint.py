@@ -525,12 +525,14 @@ def morphint(
         # Default resolution list if not provided, create resolution list with 4 levels starting with resolution
         resolution_list = [resolution * i for i in range(1, 5)]
 
-    interp_iso_fin = ii_fin.replace(
-        "thickened", "interp-vol_iso"
-    )  # FIXME: shouldn't assume 'thickened'
-    interp_fin = ii_fin.replace(
-        "thickened", "interp-vol_orig"
-    )  # FIXME: shouldn't assume 'thickened'
+    # Remove .nii.gz or .nii extension and add appropriate suffix
+    if '.nii' in ii_fin:
+        base_path = ii_fin.replace('.nii.gz', '').replace('.nii', '')
+    else : # in case there is another file type that might be supported by nibabel
+        base_path = os.path.splitext(ii_fin)[0] 
+
+    interp_iso_fin = f"{base_path}_interp-vol_iso.nii.gz"
+    interp_fin = f"{base_path}_interp-vol_orig.nii.gz"
 
     nlflow_tfm_dict = nl_deformation_flow_nii(
         ii_fin,
