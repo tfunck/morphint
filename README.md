@@ -9,6 +9,8 @@ Create continiuous 3D brain image from sparsely sampled 2D coronal sections usin
 Morphint uses ANTs to calculate nonlinear diffeomorphisms between coronal sections in a user provided 3D volume. To interpolate missing sections between two acquired sections (posterior and anterior), 
 the diffeomorphism is scaled in the forward and inverse direction and applied to the posterior and anterior sections, respectively. The warped sections are averaged using distance-weighted linear interpolation.
 
+Morphint is used as an interpolation option within the [BrainBuilder](https://github.com/tfunck/brainbuilder) 3D reconstruction pipeline.
+
 ### Installation
 
 pip install nibabel antspy numpy skimage
