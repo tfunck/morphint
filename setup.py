@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from distutils.core import setup
+from setuptools import find_packages, setup
 
 setup(
     name="morphint",
@@ -9,6 +9,6 @@ setup(
     author="Thomas Funck",
     author_email="thomas.funck@childmind.org",
     url="https://github.com/tfunck/morphint",
-    packages=["morphint"],
-    python_requires='>3.7.0'
+    packages=find_packages(),
+    python_requires=">=3.8",
 )

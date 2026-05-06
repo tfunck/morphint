@@ -8,7 +8,18 @@ import numpy as np
 from joblib import Parallel, delayed
 from skimage.transform import resize
 
-import morphint.ants_nibabel as nib
+from morphint.section_refine import section_refine
+from morphint.compute_ants_alignment import compute_ants_alignment
+
+try:
+    # Preferred when `morphint` is imported as a proper package.
+    from . import ants_nibabel as nib
+except ImportError:  # pragma: no cover
+    # Fallbacks for common "run from source" / misconfigured PYTHONPATH scenarios.
+    try:
+        import morphint.ants_nibabel as nib
+    except ImportError:
+        import ants_nibabel as nib
 
 
 def scale_displacement_field(
@@ -55,77 +66,7 @@ def scale_displacement_field(
     return output_filename
 
 
-def compute_ants_alignment(
-    prefixdir: str,
-    sec0_path: str,
-    sec1_path: str,
-    ymin: int,
-    ymax: int,
-    fwd_tfm_path: str = None,
-    inv_tfm_path: str = None,
-    resolution_list: list = [4, 2, 1, 0.5],
-    resolution: float = 0.5,
-    clobber: bool = False,
-):
-    """Compute the ANTs alignment between two sections and save the forward and inverse transforms.
 
-    Args:
-        prefixdir (str): Directory to save the output files.
-        sec0_path (str): Path to the first section.
-        sec1_path (str): Path to the second section.
-        ymin (int): Minimum y-coordinate of the section.
-        ymax (int): Maximum y-coordinate of the section.
-        resolution_list (list): List of resolutions for multi-resolution registration.
-        resolution (float): Final resolution for the registration.
-        clobber (bool): If True, overwrite existing files.
-
-    Returns:
-        fwd_tfm_path (str): Path to the forward transform file.
-        inv_tfm_path (str): Path to the inverse transform file.
-    """
-    outprefix = f"{prefixdir}/deformation_field_{ymin}_{ymax}"
-    os.makedirs(prefixdir, exist_ok=True)
-
-    write_composite_transform = 0
-
-    if fwd_tfm_path is None:
-        if write_composite_transform:
-            fwd_tfm_path = f"{outprefix}_Composite.h5"
-        else:
-            fwd_tfm_path = f"{outprefix}_0Warp.nii.gz"
-
-    if inv_tfm_path is None:
-        if write_composite_transform:
-            inv_tfm_path = f"{outprefix}_InverseComposite.h5"
-        else:
-            inv_tfm_path = f"{outprefix}_0InverseWarp.nii.gz"
-
-    mv_rsl_fn = f"{outprefix}_SyN_GC_cls_rsl.nii.gz"
-
-    if not os.path.exists(fwd_tfm_path) or not os.path.exists(inv_tfm_path) or clobber:
-        # Load the sections
-
-        from brainbuilder.utils.utils import AntsParams
-
-        nlParams = AntsParams(resolution_list, resolution, 30)
-
-        try:
-            cmd = "antsRegistration --verbose 1 --dimensionality 2 --float 0 --collapse-output-transforms 1"
-            cmd += f" --output [ {outprefix}_,{mv_rsl_fn},/tmp/tmp.nii.gz ] --interpolation Linear --use-histogram-matching 0 --winsorize-image-intensities [ 0.005,0.995 ]"
-            cmd += f" --transform SyN[ 0.1,3,0 ] --metric CC[ {sec1_path},{sec0_path},1,4 ]"
-            cmd += f" --convergence  {nlParams.itr_str} --shrink-factors {nlParams.f_str} --smoothing-sigmas {nlParams.s_str} "
-
-            subprocess.run(cmd, shell=True, executable="/bin/bash")
-
-        except RuntimeError as e:
-            print("Error in registration:", e)
-
-        print(cmd)
-
-    assert os.path.exists(fwd_tfm_path), f"Error: output does not exist {fwd_tfm_path}"
-    assert os.path.exists(inv_tfm_path), f"Error: output does not exist {inv_tfm_path}"
-
-    return fwd_tfm_path, inv_tfm_path
 
 
 def nl_deformation_flow(
@@ -502,6 +443,11 @@ def morphint(
     resolution_list: list = None,
     tfm_dict: dict = None,
     interpolation: str = "Linear",
+    refine_alignment: bool = False,
+    base_ants_itr: int = 10,
+    n_resolutions: int = 3,
+    iterations_per_resolution: int = 4,
+    relax: float = 0.9,
     num_jobs: int = -1,
     clobber: bool = False,
 ):
@@ -510,6 +456,26 @@ def morphint(
     ----------
     ii_fin : str
         Path to the input volume file.
+    curr_output_dir : str
+        Directory to save the output files.
+    resolution : float
+        Desired resolution for the output volume.   
+        resolution_list : list, optional
+        List of resolutions for multi-resolution registration. If None, a default list will be generated based on the provided resolution and n_resolutions.
+    tfm_dict : dict, optional
+        Dictionary of pre-computed transforms for each section. If None, transforms will be computed from scratch.
+    interpolation : str, optional
+        Interpolation method to use for combining the forward and inverse warped sections. Options are "Linear" or "NearestNeighbor". The default is "Linear".
+    refine_alignment : bool, optional
+        If True, perform an additional refinement step on the initial isomorphic interpolation using the section_refine function. The default is False.
+    base_ants_itr : int, optional
+        Base number of iterations for the ANTs registration. The actual number of iterations will be determined by the resolution list and n_resolutions. The default is 10.
+    n_resolutions : int, optional
+        Number of resolutions to use for multi-resolution registration. The default is 3.
+    iterations_per_resolution : int, optional
+        Number of iterations to perform at each resolution level during the refinement step. The default is 4.
+    relax : float, optional
+        Relaxation factor to use during the refinement step. The default is 0.9.    
     clobber : bool, optional
         If True, overwrite existing files. The default is False.
 
@@ -523,7 +489,27 @@ def morphint(
     """
     if resolution_list is None:
         # Default resolution list if not provided, create resolution list with 4 levels starting with resolution
-        resolution_list = [resolution * i for i in range(1, 5)]
+        resolution_list = [resolution * i for i in range(1, n_resolutions + 1)]
+
+    if refine_alignment :
+        refine_output_dir = f"{curr_output_dir}/refine_alignment"
+        
+        os.makedirs(refine_output_dir, exist_ok=True)
+        
+        ii_refined_fn = f"{refine_output_dir}/{os.path.basename(ii_fin).replace('.nii.gz', '_refined-2d.nii.gz')}"
+
+        section_refine(
+            ii_fin, 
+            ii_refined_fn, 
+            refine_output_dir ,
+            relax=relax,
+            iterations_per_resolution=iterations_per_resolution,
+            base_itr=base_ants_itr,
+            n_resolutions=n_resolutions,
+            clobber=clobber,
+        )
+
+        ii_fin = ii_refined_fn
 
     # Remove .nii.gz or .nii extension and add appropriate suffix
     if '.nii' in ii_fin:
