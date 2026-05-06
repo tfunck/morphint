@@ -10,6 +10,7 @@ from skimage.transform import resize
 
 from morphint.section_refine import section_refine
 from morphint.compute_ants_alignment import compute_ants_alignment
+from morphint.rigid_alignment import rigid_align_nii
 
 try:
     # Preferred when `morphint` is imported as a proper package.
@@ -116,9 +117,6 @@ def nl_deformation_flow(
         sec1_path,
         ymin,
         ymax,
-        itr_str=nlParams.itr_str,
-        f_str=nlParams.f_str,
-        s_str=nlParams.s_str,
         fwd_tfm_path=fwd_tfm_path,
         inv_tfm_path=inv_tfm_path,
         clobber=clobber,
@@ -448,7 +446,8 @@ def morphint(
     resolution_list: list = None,
     tfm_dict: dict = None,
     interpolation: str = "Linear",
-    refine_alignment: bool = False,
+    rigid_alignment_flag:bool = False,
+    refine_alignment_flag: bool = False,
     base_ants_itr: int = 10,
     n_resolutions: int = 3,
     iterations_per_resolution: int = 4,
@@ -495,8 +494,23 @@ def morphint(
     if resolution_list is None:
         # Default resolution list if not provided, create resolution list with 4 levels starting with resolution
         resolution_list = [resolution * i for i in range(1, n_resolutions + 1)]
+        
+    if rigid_alignment_flag:
+        rigid_output_dir = f"{curr_output_dir}/rigid_alignment"
+        
+        os.makedirs(rigid_output_dir, exist_ok=True)
+        
+        ii_rigid_fn = f"{rigid_output_dir}/{os.path.basename(ii_fin).replace('.nii.gz', '_rigid.nii.gz')}"
 
-    if refine_alignment :
+        rigid_align_nii(
+            ii_fin, 
+            ii_rigid_fn, 
+            rigid_output_dir,
+            clobber=clobber,
+        )
+        ii_fin = ii_rigid_fn 
+
+    if refine_alignment_flag:
         refine_output_dir = f"{curr_output_dir}/refine_alignment"
         
         os.makedirs(refine_output_dir, exist_ok=True)

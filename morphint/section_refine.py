@@ -757,8 +757,8 @@ def refine_nii(
         in_vol = in_img.numpy()
         in_vol[in_vol < 0] = 0
 
-        origin = tuple(in_img.origin[[0, 2]])
-        spacing = tuple(in_img.spacing[[0, 2]])
+        origin = tuple(np.array(in_img.origin)[[0, 2]])
+        spacing = tuple(np.array(in_img.spacing)[[0, 2]])
 
         refined_vol, tfm_dict_out = refine_volume(
             in_vol,
