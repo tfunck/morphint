@@ -68,7 +68,6 @@ def scale_displacement_field(
 
 
 
-
 def nl_deformation_flow(
     sec0_path: str,
     sec1_path: str,
@@ -105,6 +104,11 @@ def nl_deformation_flow(
     os.makedirs(prefixdir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(qc_dir, exist_ok=True)
+    
+    
+    from brainbuilder.utils.utils import AntsParams
+
+    nlParams = AntsParams(resolution_list, resolution, 30)
 
     fwd_tfm_path, inv_tfm_path = compute_ants_alignment(
         prefixdir,
@@ -112,10 +116,11 @@ def nl_deformation_flow(
         sec1_path,
         ymin,
         ymax,
+        itr_str=nlParams.itr_str,
+        f_str=nlParams.f_str,
+        s_str=nlParams.s_str,
         fwd_tfm_path=fwd_tfm_path,
         inv_tfm_path=inv_tfm_path,
-        resolution_list=resolution_list,
-        resolution=resolution,
         clobber=clobber,
     )
 
