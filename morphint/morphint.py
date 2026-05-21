@@ -115,10 +115,12 @@ def compute_ants_alignment(
     sec1_path: str,
     ymin: int,
     ymax: int,
+    itr_str: str = "2000x1000x500x250",
+    f_str: str = "4x3x2x1",
+    s_str: str = ".8x0.66x.3x0",
     fwd_tfm_path: str = None,
     inv_tfm_path: str = None,
-    resolution_list: list = [4, 2, 1, 0.5],
-    resolution: float = 0.5,
+    init_tfm : str = None,
     clobber: bool = False,
 ):
     """Compute the ANTs alignment between two sections and save the forward and inverse transforms.
@@ -159,10 +161,6 @@ def compute_ants_alignment(
     if not os.path.exists(fwd_tfm_path) or not os.path.exists(inv_tfm_path) or clobber:
         # Load the sections
 
-        from brainbuilder.utils.utils import AntsParams
-
-        nlParams = AntsParams(resolution_list, resolution, 30)
-
         try:
             # IMPORTANT: /tmp/tmp.nii.gz is not safe under Parallel; use a unique path per job.
             tmp_warped = os.path.join(prefixdir, f"tmp_warped_{ymin}_{ymax}.nii.gz")
@@ -170,7 +168,7 @@ def compute_ants_alignment(
             cmd = "antsRegistration --verbose 1 --dimensionality 2 --float 0 --collapse-output-transforms 1"
             cmd += f" --output [ {outprefix}_,{mv_rsl_fn},{tmp_warped} ] --interpolation Linear --use-histogram-matching 0 --winsorize-image-intensities [ 0.005,0.995 ]"
             cmd += f" --transform SyN[ 0.1,3,0 ] --metric CC[ {sec1_path},{sec0_path},1,4 ]"
-            cmd += f" --convergence  {nlParams.itr_str} --shrink-factors {nlParams.f_str} --smoothing-sigmas {nlParams.s_str} "
+            cmd += f" --convergence  {itr_str} --shrink-factors {f_str} --smoothing-sigmas {s_str} "
 
             env = os.environ.copy()
             # Keep each worker from also spawning many ITK/OpenMP threads.
@@ -232,6 +230,11 @@ def nl_deformation_flow(
     os.makedirs(prefixdir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(qc_dir, exist_ok=True)
+    
+    
+    from brainbuilder.utils.utils import AntsParams
+
+    nlParams = AntsParams(resolution_list, resolution, 30)
 
     fwd_tfm_path, inv_tfm_path = compute_ants_alignment(
         prefixdir,
@@ -239,10 +242,11 @@ def nl_deformation_flow(
         sec1_path,
         ymin,
         ymax,
+        itr_str=nlParams.itr_str,
+        f_str=nlParams.f_str,
+        s_str=nlParams.s_str,
         fwd_tfm_path=fwd_tfm_path,
         inv_tfm_path=inv_tfm_path,
-        resolution_list=resolution_list,
-        resolution=resolution,
         clobber=clobber,
     )
 
