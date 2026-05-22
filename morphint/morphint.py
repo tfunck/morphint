@@ -1,8 +1,6 @@
 import json
 import os
 import subprocess
-import tempfile
-import uuid
 
 import ants
 import matplotlib.pyplot as plt
@@ -11,6 +9,7 @@ import numpy as np
 from joblib import Parallel, cpu_count, delayed, parallel_backend
 from skimage.transform import resize
 
+from morphint.io_helpers import _atomic_ants_image_write, _is_nonempty_file, _is_readable_nifti
 from morphint.section_refine import section_refine
 from morphint.compute_ants_alignment import compute_ants_alignment
 from morphint.rigid_alignment import rigid_align_nii
@@ -482,7 +481,7 @@ def morphint(
     tfm_dict: dict = None,
     interpolation: str = "Linear",
     rigid_alignment_flag:bool = False,
-    refine_alignment_flag: bool = False,
+    refine_2d_alignment_flag: bool = False,
     base_ants_itr: int = 10,
     n_resolutions: int = 3,
     iterations_per_resolution: int = 4,
@@ -505,7 +504,7 @@ def morphint(
         Dictionary of pre-computed transforms for each section. If None, transforms will be computed from scratch.
     interpolation : str, optional
         Interpolation method to use for combining the forward and inverse warped sections. Options are "Linear" or "NearestNeighbor". The default is "Linear".
-    refine_alignment : bool, optional
+    refine_2d_alignment_flag : bool, optional
         If True, perform an additional refinement step on the initial isomorphic interpolation using the section_refine function. The default is False.
     base_ants_itr : int, optional
         Base number of iterations for the ANTs registration. The actual number of iterations will be determined by the resolution list and n_resolutions. The default is 10.
@@ -545,7 +544,7 @@ def morphint(
         )
         ii_fin = ii_rigid_fn 
 
-    if refine_alignment_flag:
+    if refine_2d_alignment_flag:
         refine_output_dir = f"{curr_output_dir}/refine_alignment"
         
         os.makedirs(refine_output_dir, exist_ok=True)
