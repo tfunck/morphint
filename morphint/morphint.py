@@ -4,10 +4,12 @@ import subprocess
 
 import ants
 import matplotlib.pyplot as plt
+import nibabel as nb
 import numpy as np
-from joblib import Parallel, delayed
+from joblib import Parallel, cpu_count, delayed, parallel_backend
 from skimage.transform import resize
 
+from morphint.io_helpers import _atomic_ants_image_write, _is_nonempty_file, _is_readable_nifti
 from morphint.section_refine import section_refine
 from morphint.compute_ants_alignment import compute_ants_alignment
 from morphint.rigid_alignment import rigid_align_nii
@@ -38,11 +40,7 @@ def scale_displacement_field(
     output_filename : str
         Path to save the scaled displacement field as a NIfTI file (.nii.gz).
     """
-    if (
-        os.path.exists(transform_path)
-        and not os.path.exists(output_filename)
-        or clobber
-    ):
+    if (os.path.exists(transform_path) and not _is_nonempty_file(output_filename)) or clobber:
         # Step 1: Read the transform as an image
         try:
             transform_img = ants.image_read(transform_path)
@@ -61,8 +59,16 @@ def scale_displacement_field(
         # x0 = np.mean(np.abs(transform_img.numpy()) )
         scaled_transform = transform_img * scale_factor
 
-        # Step 4: Write the result to a NIfTI file
-        ants.image_write(scaled_transform, output_filename)
+        # Step 4: Write the result to a NIfTI file (atomic)
+        _atomic_ants_image_write(scaled_transform, output_filename)
+
+        # check that the output file was created and can be opened
+        try:
+            nb.load(output_filename)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to read output file {output_filename} after writing. Ensure the output path is valid and writable."
+            ) from e
 
     return output_filename
 
@@ -98,6 +104,12 @@ def nl_deformation_flow(
     Returns:
         None
     """
+    # Reduce ITK/ANTs internal threading per worker to avoid oversubscription/segfaults under Parallel.
+    try:
+        ants.set_num_threads(1)
+    except Exception:
+        pass
+
     qc_dir = f"{output_dir}/qc"
 
     prefixdir = f"{output_dir}/tfm_{ymin}_{ymax}"
@@ -128,6 +140,19 @@ def nl_deformation_flow(
 
     y_list = np.arange(ymin + 1, ymax).astype(np.uint)
 
+    try:
+        sec0 = ants.image_read(sec0_path)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Failed to read section file {sec0_path}. Ensure it's a valid image file."
+        ) from e
+    try:
+        sec1 = ants.image_read(sec1_path)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Failed to read section file {sec1_path}. Ensure it's a valid image file."
+        ) from e
+
     for i, y in zip(range(steps), y_list):
         s = i / steps
 
@@ -135,16 +160,14 @@ def nl_deformation_flow(
 
         output_image_list.append(output_image_path)
 
-        sec0 = ants.image_read(sec0_path)
-        sec1 = ants.image_read(sec1_path)
-
-        if not os.path.exists(output_image_path) or clobber:
-            scaled_fwd_tfm_path = f"{output_dir}/scaled_fwd_tfm_{y}.nii.gz"
+        # Under parallelism or after interrupted runs, a file may exist but be unreadable.
+        if not _is_readable_nifti(output_image_path) or clobber:
+            scaled_fwd_tfm_path = f"{prefixdir}/scaled_fwd_tfm_{y}.nii.gz"
             scale_displacement_field(
                 fwd_tfm_path, s, scaled_fwd_tfm_path, clobber=clobber
             )
 
-            scaled_inv_tfm_path = f"{output_dir}/scaled_inv_tfm_{y}.nii.gz"
+            scaled_inv_tfm_path = f"{prefixdir}/scaled_inv_tfm_{y}.nii.gz"
             scale_displacement_field(
                 inv_tfm_path, 1 - s, scaled_inv_tfm_path, clobber=clobber
             )
@@ -181,15 +204,12 @@ def nl_deformation_flow(
 
             else:
                 # apply linear interpolation
-                sec0 = ants.image_read(sec0_path)
-                sec1 = ants.image_read(sec1_path)
-
                 sec0_fwd = sec0 * (1 - s)
                 sec1_inv = sec1 * s
                 output_image = sec0_fwd + sec1_inv
 
-            # Save the output image
-            ants.image_write(output_image, output_image_path)
+            # Save the output image (atomic to avoid partial reads under parallelism)
+            _atomic_ants_image_write(output_image, output_image_path)
 
         qc_png = f"{qc_dir}/qc_flow_{y}.png"
 
@@ -247,19 +267,22 @@ def process_section(
         if verbose:
             print("Using inv_tfm_path:", inv_tfm_path)
 
-    orig_dir = f"{output_dir}/orig"
+    # IMPORTANT: do NOT write these endpoint slice files into a shared directory.
+    # Parallel jobs share endpoints (e.g. one gap's y1 is the next gap's y0),
+    # so using shared filenames like orig/flow_<y>.nii.gz leads to concurrent
+    # writes and sporadic segfaults in ants.image_read().
+    prefixdir = f"{output_dir}/tfm_{y0}_{y1}"
+    os.makedirs(prefixdir, exist_ok=True)
 
-    os.makedirs(orig_dir, exist_ok=True)
-
-    y0_ants_path = f"{orig_dir}/flow_{y0}.nii.gz"
-    if not os.path.exists(y0_ants_path) or clobber:
+    y0_ants_path = f"{prefixdir}/sec_{y0}.nii.gz"
+    if not _is_readable_nifti(y0_ants_path) or clobber:
         y0_ants = ants.from_numpy(vol[:, y0, :], origin=origin, spacing=spacing)
-        y0_ants.to_filename(y0_ants_path)
+        _atomic_ants_image_write(y0_ants, y0_ants_path)
 
-    y1_ants_path = f"{orig_dir}/flow_{y1}.nii.gz"
-    if not os.path.exists(y1_ants_path) or clobber:
+    y1_ants_path = f"{prefixdir}/sec_{y1}.nii.gz"
+    if not _is_readable_nifti(y1_ants_path) or clobber:
         y1_ants = ants.from_numpy(vol[:, y1, :], origin=origin, spacing=spacing)
-        y1_ants.to_filename(y1_ants_path)
+        _atomic_ants_image_write(y1_ants, y1_ants_path)
 
     return nl_deformation_flow(
         y0_ants_path,
@@ -307,32 +330,42 @@ def nl_deformation_flow_3d(
         # cast all keys to str
         tfm_dict = {str(k): i for k, i in tfm_dict.items()}
 
-    results = Parallel(n_jobs=num_jobs)(
-        delayed(process_section)(
-            y0,
-            y1,
-            output_dir,
-            vol,
-            origin,
-            spacing,
-            fwd_tfm_path=tfm_dict[str(y0)][0],
-            inv_tfm_path=tfm_dict[str(y0)][1],
-            resolution_list=resolution_list,
-            resolution=resolution,
-            interpolation=interpolation,
-            clobber=clobber,
+    # Using all available cores causes memory issues; ensure we actually halve when num_jobs=-1.
+    if num_jobs in (-1, 0, None):
+        num_jobs = max(1, cpu_count() // 2)
+    else:
+        num_jobs = max(1, num_jobs // 2)
+
+    # Cap OpenMP/BLAS/ITK threadpools inside each worker to avoid native crashes.
+    with parallel_backend("loky", inner_max_num_threads=1):
+        results = Parallel(n_jobs=num_jobs, backend="loky", prefer="processes")(
+            delayed(process_section)(
+                y0,
+                y1,
+                output_dir,
+                vol,
+                origin,
+                spacing,
+                fwd_tfm_path=tfm_dict[str(y0)][0],
+                inv_tfm_path=tfm_dict[str(y0)][1],
+                resolution_list=resolution_list,
+                resolution=resolution,
+                interpolation=interpolation,
+                clobber=clobber,
+            )
+            for y0, y1 in zip(valid_idx[:-1], valid_idx[1:])
+            if y1 > y0 + 1
         )
-        for y0, y1 in zip(valid_idx[:-1], valid_idx[1:])
-        if y1 > y0 + 1
-    )
 
     out_tfm_dict = {int(k): i for _, _, d in results for k, i in d.items()}
 
     for y_list, inter_images, _ in results:
         for y, image_path in zip(y_list, inter_images):
-            if verbose:
-                print(y, image_path)
-            out_vol[:, y, :] = ants.image_read(image_path).numpy()
+            print(y, image_path)
+            try:
+                out_vol[:, y, :] = nb.load(image_path).get_fdata(dtype=np.float32)
+            except Exception as e:
+                raise RuntimeError(f"Failed to read interpolated slice: {image_path}") from e
 
     return out_vol, out_tfm_dict
 
@@ -476,7 +509,7 @@ def morphint(
         Dictionary of pre-computed transforms for each section. If None, transforms will be computed from scratch.
     interpolation : str, optional
         Interpolation method to use for combining the forward and inverse warped sections. Options are "Linear" or "NearestNeighbor". The default is "Linear".
-    refine_2d_alignment : bool, optional
+    refine_2d_alignment_flag : bool, optional
         If True, perform an additional refinement step on the initial isomorphic interpolation using the section_refine function. The default is False.
     base_ants_itr : int, optional
         Base number of iterations for the ANTs registration. The actual number of iterations will be determined by the resolution list and n_resolutions. The default is 10.
@@ -517,7 +550,7 @@ def morphint(
         ii_fin = ii_rigid_fn 
 
     if refine_2d_alignment_flag:
-        refine_output_dir = f"{curr_output_dir}/refine_2d_alignment"
+        refine_output_dir = f"{curr_output_dir}/refine_alignment"
         
         os.makedirs(refine_output_dir, exist_ok=True)
         
