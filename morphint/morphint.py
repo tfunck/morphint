@@ -231,17 +231,21 @@ def process_section(
     resolution_list: list = [4, 2, 1, 0.5],
     resolution: float = 0.5,
     interpolation: str = "Linear",
+    verbose: bool = False,
     clobber: bool = False,
 ):
     """Process a pair of sections and compute the deformation flow."""
-    print("\t>>> Processing sections:", y0, y1)
+    if verbose :
+        print("\t>>> Processing sections:", y0, y1)
     if fwd_tfm_path is not None:
         assert os.path.exists(fwd_tfm_path)
-        print("Using fwd_tfm_path:", fwd_tfm_path)
+        if verbose:
+            print("Using fwd_tfm_path:", fwd_tfm_path)
 
     if inv_tfm_path is not None:
         assert os.path.exists(inv_tfm_path)
-        print("Using inv_tfm_path:", inv_tfm_path)
+        if verbose:
+            print("Using inv_tfm_path:", inv_tfm_path)
 
     orig_dir = f"{output_dir}/orig"
 
@@ -282,6 +286,7 @@ def nl_deformation_flow_3d(
     resolution: float = 0.5,
     interpolation: str = "Linear",
     num_jobs: int = -1,
+    verbose: bool = False,
     clobber: bool = False,
 ):
     """Apply  nl intersection_flow to a volume where there are missing sections along axis=1"""
@@ -325,7 +330,8 @@ def nl_deformation_flow_3d(
 
     for y_list, inter_images, _ in results:
         for y, image_path in zip(y_list, inter_images):
-            print(y, image_path)
+            if verbose:
+                print(y, image_path)
             out_vol[:, y, :] = ants.image_read(image_path).numpy()
 
     return out_vol, out_tfm_dict
@@ -447,7 +453,7 @@ def morphint(
     tfm_dict: dict = None,
     interpolation: str = "Linear",
     rigid_alignment_flag:bool = False,
-    refine_alignment_flag: bool = False,
+    refine_2d_alignment_flag: bool = False,
     base_ants_itr: int = 10,
     n_resolutions: int = 3,
     iterations_per_resolution: int = 4,
@@ -470,7 +476,7 @@ def morphint(
         Dictionary of pre-computed transforms for each section. If None, transforms will be computed from scratch.
     interpolation : str, optional
         Interpolation method to use for combining the forward and inverse warped sections. Options are "Linear" or "NearestNeighbor". The default is "Linear".
-    refine_alignment : bool, optional
+    refine_2d_alignment : bool, optional
         If True, perform an additional refinement step on the initial isomorphic interpolation using the section_refine function. The default is False.
     base_ants_itr : int, optional
         Base number of iterations for the ANTs registration. The actual number of iterations will be determined by the resolution list and n_resolutions. The default is 10.
@@ -510,8 +516,8 @@ def morphint(
         )
         ii_fin = ii_rigid_fn 
 
-    if refine_alignment_flag:
-        refine_output_dir = f"{curr_output_dir}/refine_alignment"
+    if refine_2d_alignment_flag:
+        refine_output_dir = f"{curr_output_dir}/refine_2d_alignment"
         
         os.makedirs(refine_output_dir, exist_ok=True)
         
