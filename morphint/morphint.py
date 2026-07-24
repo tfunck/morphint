@@ -262,17 +262,21 @@ def process_section(
     resolution: float = 0.5,
     interpolation: str = "Linear",
     axis: int = DEFAULT_SECTION_AXIS,
+    verbose: bool = False,
     clobber: bool = False,
 ):
     """Process a pair of sections and compute the deformation flow."""
-    print("\t>>> Processing sections:", y0, y1)
+    if verbose :
+        print("\t>>> Processing sections:", y0, y1)
     if fwd_tfm_path is not None:
         assert os.path.exists(fwd_tfm_path)
-        print("Using fwd_tfm_path:", fwd_tfm_path)
+        if verbose:
+            print("Using fwd_tfm_path:", fwd_tfm_path)
 
     if inv_tfm_path is not None:
         assert os.path.exists(inv_tfm_path)
-        print("Using inv_tfm_path:", inv_tfm_path)
+        if verbose:
+            print("Using inv_tfm_path:", inv_tfm_path)
 
     # IMPORTANT: do NOT write these endpoint slice files into a shared directory.
     # Parallel jobs share endpoints (e.g. one gap's y1 is the next gap's y0),
@@ -317,6 +321,7 @@ def nl_deformation_flow_3d(
     interpolation: str = "Linear",
     num_jobs: int = -1,
     axis: int = DEFAULT_SECTION_AXIS,
+    verbose: bool = False,
     clobber: bool = False,
 ):
     """Apply  nl intersection_flow to a volume where there are missing sections along the sectioning axis"""
