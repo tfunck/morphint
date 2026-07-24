@@ -36,6 +36,14 @@ import numpy as np
 
 import morphint.ants_nibabel as nib  # type: ignore[no-redef]
 
+from brainbuilder.utils.axis_utils import (
+    DEFAULT_SECTION_AXIS,
+    get_section,
+    inplane_axes,
+    section_profile,
+    set_section,
+)
+
 
 # ---------------------------------------------------------------------------
 # Pairwise rigid registration via ANTs subprocess
@@ -384,6 +392,7 @@ def rigid_align_volume(
     output_dir: str,
     origin: tuple,
     spacing: tuple,
+    axis: int = DEFAULT_SECTION_AXIS,
     anchor_index: Optional[int] = None,
     resolution_list: list = (4, 2, 1, 0.5),
     resolution: float = 0.5,
@@ -436,7 +445,7 @@ def rigid_align_volume(
         resolution version of the same sections).
     """
     out_vol = vol.copy()
-    valid_idx = np.where(np.max(vol, axis=(0, 2)) > 0)[0]
+    valid_idx = np.where(section_profile(vol, axis, reduction=np.max) > 0)[0]
     if len(valid_idx) < 2:
         # 0 or 1 valid sections: nothing to align.
         return out_vol, {}
@@ -464,7 +473,7 @@ def rigid_align_volume(
     # Write each valid section to disk for ANTs to read.
     section_paths = {
         y: _write_section(
-            vol[:, y, :], origin, spacing,
+            get_section(vol, y, axis), origin, spacing,
             os.path.join(sections_dir, f"section_{y}.nii.gz"),
             clobber=clobber,
         )
@@ -499,13 +508,14 @@ def rigid_align_volume(
         # Resample shape if antsApplyTransforms produced a slightly different
         # grid (it shouldn't, since reference == moving for the chain
         # composition, but handle defensively).
-        if aligned_arr.shape != vol[:, y, :].shape:
+        section_shape = get_section(vol, y, axis).shape
+        if aligned_arr.shape != section_shape:
             from skimage.transform import resize
             aligned_arr = resize(
-                aligned_arr, vol[:, y, :].shape,
+                aligned_arr, section_shape,
                 order=1, preserve_range=True, anti_aliasing=False,
             ).astype(np.float32)
-        out_vol[:, y, :] = aligned_arr
+        set_section(out_vol, aligned_arr, y, axis)
 
     return out_vol, transforms
 
@@ -514,6 +524,7 @@ def rigid_align_nii(
     in_fin: str,
     out_fin: str,
     output_dir: str,
+    axis: int = DEFAULT_SECTION_AXIS,
     anchor_index: Optional[int] = None,
     resolution_list: list = (4, 2, 1, 0.5),
     resolution: float = 0.5,
@@ -532,14 +543,16 @@ def rigid_align_nii(
         in_vol = in_img.get_fdata()
         in_vol[in_vol < 0] = 0
 
-        origin = tuple(in_img.affine[[0, 2], 3])
-        spacing = tuple(in_img.affine[[0, 2], [0, 2]])
+        inplane = list(inplane_axes(axis))
+        origin = tuple(in_img.affine[inplane, 3])
+        spacing = tuple(in_img.affine[inplane, inplane])
 
         aligned_vol, transforms = rigid_align_volume(
             in_vol,
             output_dir + "/rigid_align/",
             origin=origin,
             spacing=spacing,
+            axis=axis,
             anchor_index=anchor_index,
             resolution_list=resolution_list,
             resolution=resolution,

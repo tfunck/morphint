@@ -78,6 +78,14 @@ from joblib import Parallel, delayed
 from morphint.inter_section_similarity import inter_section_similarity
 from morphint.compute_ants_alignment import compute_ants_alignment
 
+from brainbuilder.utils.axis_utils import (
+    DEFAULT_SECTION_AXIS,
+    get_section,
+    inplane_axes,
+    section_profile,
+    set_section,
+)
+
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -532,6 +540,7 @@ def _initialize_iter0(
     iter_dir: str,
     origin: tuple,
     spacing: tuple,
+    axis: int = DEFAULT_SECTION_AXIS,
 ) -> dict:
     """Write each valid input section to disk as the iteration-0 'resampled'
     image. Returns a dict {y: path_to_section_i0}.
@@ -545,7 +554,7 @@ def _initialize_iter0(
     for y in valid_idx:
         path = os.path.join(iter_dir, f"section_{int(y)}.nii.gz")
         if not os.path.exists(path):
-            arr = vol[:, int(y), :]
+            arr = get_section(vol, int(y), axis)
             _slice_to_ants(arr, origin, spacing).to_filename(path)
         section_paths[int(y)] = path
     return section_paths
@@ -556,6 +565,7 @@ def refine_volume(
     output_dir: str,
     origin: tuple,
     spacing: tuple,
+    axis: int = DEFAULT_SECTION_AXIS,
     relax: float = 0.5,
     resolution_list: list = (4, 2, 1, 0.5),
     num_jobs: int = -1,
@@ -615,13 +625,13 @@ def refine_volume(
     """
     out_vol = vol.copy()
 
-    valid_idx = np.where(np.max(vol, axis=(0, 2)) > 0)[0]
+    valid_idx = np.where(section_profile(vol, axis, reduction=np.max) > 0)[0]
     if len(valid_idx) == 0:
         return out_vol, (tfm_dict or {})
 
     # Iteration 0: each valid section becomes its own "resampled" image.
     iter0_dir = os.path.join(output_dir, "iter_0")
-    section_paths = _initialize_iter0(vol, valid_idx, iter0_dir, origin, spacing)
+    section_paths = _initialize_iter0(vol, valid_idx, iter0_dir, origin, spacing, axis=axis)
 
     # Pair warps live in their own dir, separate from per-iter scratch.
     # We do NOT reuse stale pair warps across iterations: the resampled
@@ -689,7 +699,7 @@ def refine_volume(
                 y_m=y_m,
                 y_p=y_p,
                 y_n=y_n,
-                section_orig=vol[:, y_m, :],
+                section_orig=get_section(vol, y_m, axis),
                 mid_resampled_path=snapshot_paths[y_m],
                 prev_resampled_path=snapshot_paths[y_p],
                 next_resampled_path=snapshot_paths[y_n],
@@ -720,7 +730,7 @@ def refine_volume(
     # ----------- pack refined sections back into the volume -----------
     for y_m in interior_y:
         refined = ants.image_read(section_paths[y_m]).numpy()
-        out_vol[:, y_m, :] = refined
+        set_section(out_vol, refined, y_m, axis)
     # Endpoints retain their original (non-refined) values.
 
     tfm_dict_out = {f"{a},{b}": v for (a, b), v in latest_pair_warps.items()}
@@ -735,6 +745,7 @@ def refine_nii(
     in_fin: str,
     out_fin: str,
     output_dir: str,
+    axis: int = DEFAULT_SECTION_AXIS,
     relax: float = 0.5,
     resolution_list: list = (4, 2, 1, 0.5),
     base_itr: int = 30,
@@ -757,14 +768,16 @@ def refine_nii(
         in_vol = in_img.numpy()
         in_vol[in_vol < 0] = 0
 
-        origin = tuple(np.array(in_img.origin)[[0, 2]])
-        spacing = tuple(np.array(in_img.spacing)[[0, 2]])
+        inplane = list(inplane_axes(axis))
+        origin = tuple(np.array(in_img.origin)[inplane])
+        spacing = tuple(np.array(in_img.spacing)[inplane])
 
         refined_vol, tfm_dict_out = refine_volume(
             in_vol,
             output_dir + "/section_refine/",
             origin=origin,
             spacing=spacing,
+            axis=axis,
             relax=relax,
             resolution_list=resolution_list,
             base_itr=base_itr,
@@ -787,8 +800,8 @@ def refine_nii(
         with open(tfm_json, "r") as f:
             tfm_dict_out = json.load(f)
     
-    correlations_orig = inter_section_similarity(in_fin)
-    correlations_refined = inter_section_similarity(out_fin)
+    correlations_orig = inter_section_similarity(in_fin, axis=axis)
+    correlations_refined = inter_section_similarity(out_fin, axis=axis)
     mean_sim_orig = np.mean(correlations_orig)
     mean_sim_refined = np.mean(correlations_refined)
 
@@ -801,6 +814,7 @@ def section_refine(
     in_fin: str,
     out_fin:str,
     output_dir: str,
+    axis: int = DEFAULT_SECTION_AXIS,
     n_resolutions: int = 3,
     iterations_per_resolution: int = 1,
     relax: float = 0.5,
@@ -826,6 +840,7 @@ def section_refine(
         in_fin=in_fin,
         out_fin=out_fin,
         output_dir=output_dir,
+        axis=axis,
         relax=relax,
         base_itr=base_itr,
         iterations_per_resolution=iterations_per_resolution,

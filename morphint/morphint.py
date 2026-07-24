@@ -14,6 +14,16 @@ from morphint.section_refine import section_refine
 from morphint.compute_ants_alignment import compute_ants_alignment
 from morphint.rigid_alignment import rigid_align_nii
 
+from brainbuilder.utils.axis_utils import (
+    DEFAULT_SECTION_AXIS,
+    get_affine_spacing,
+    get_section,
+    inplane_axes,
+    section_profile,
+    set_section,
+    volume_shape,
+)
+
 try:
     # Preferred when `morphint` is imported as a proper package.
     from . import ants_nibabel as nib
@@ -251,6 +261,7 @@ def process_section(
     resolution_list: list = [4, 2, 1, 0.5],
     resolution: float = 0.5,
     interpolation: str = "Linear",
+    axis: int = DEFAULT_SECTION_AXIS,
     clobber: bool = False,
 ):
     """Process a pair of sections and compute the deformation flow."""
@@ -272,12 +283,12 @@ def process_section(
 
     y0_ants_path = f"{prefixdir}/sec_{y0}.nii.gz"
     if not _is_readable_nifti(y0_ants_path) or clobber:
-        y0_ants = ants.from_numpy(vol[:, y0, :], origin=origin, spacing=spacing)
+        y0_ants = ants.from_numpy(get_section(vol, y0, axis), origin=origin, spacing=spacing)
         _atomic_ants_image_write(y0_ants, y0_ants_path)
 
     y1_ants_path = f"{prefixdir}/sec_{y1}.nii.gz"
     if not _is_readable_nifti(y1_ants_path) or clobber:
-        y1_ants = ants.from_numpy(vol[:, y1, :], origin=origin, spacing=spacing)
+        y1_ants = ants.from_numpy(get_section(vol, y1, axis), origin=origin, spacing=spacing)
         _atomic_ants_image_write(y1_ants, y1_ants_path)
 
     return nl_deformation_flow(
@@ -305,10 +316,11 @@ def nl_deformation_flow_3d(
     resolution: float = 0.5,
     interpolation: str = "Linear",
     num_jobs: int = -1,
+    axis: int = DEFAULT_SECTION_AXIS,
     clobber: bool = False,
 ):
-    """Apply  nl intersection_flow to a volume where there are missing sections along axis=1"""
-    valid_idx = np.where(np.max(vol, axis=(0, 2)) > 0)[0]
+    """Apply  nl intersection_flow to a volume where there are missing sections along the sectioning axis"""
+    valid_idx = np.where(section_profile(vol, axis, reduction=np.max) > 0)[0]
 
     assert (
         len(valid_idx) > 0
@@ -346,6 +358,7 @@ def nl_deformation_flow_3d(
                 resolution_list=resolution_list,
                 resolution=resolution,
                 interpolation=interpolation,
+                axis=axis,
                 clobber=clobber,
             )
             for y0, y1 in zip(valid_idx[:-1], valid_idx[1:])
@@ -358,7 +371,12 @@ def nl_deformation_flow_3d(
         for y, image_path in zip(y_list, inter_images):
             print(y, image_path)
             try:
-                out_vol[:, y, :] = nb.load(image_path).get_fdata(dtype=np.float32)
+                set_section(
+                    out_vol,
+                    nb.load(image_path).get_fdata(dtype=np.float32),
+                    y,
+                    axis,
+                )
             except Exception as e:
                 raise RuntimeError(f"Failed to read interpolated slice: {image_path}") from e
 
@@ -374,6 +392,7 @@ def nl_deformation_flow_nii(
     resolution: float = 0.5,
     interpolation: str = "Linear",
     num_jobs: int = -1,
+    axis: int = DEFAULT_SECTION_AXIS,
     clobber: bool = False,
 ):
     nlflow_tfm_json = interp_acq_fin.replace(".nii.gz", "") + "nlflow_tfm.json"
@@ -404,8 +423,9 @@ def nl_deformation_flow_nii(
         acq_vol = acq_img.get_fdata()
         acq_vol[acq_vol < 0] = 0
 
-        origin = list(acq_img.affine[[0, 2], 3])
-        spacing = list(acq_img.affine[[0, 2], [0, 2]])
+        inplane = list(inplane_axes(axis))
+        origin = list(acq_img.affine[inplane, 3])
+        spacing = list(acq_img.affine[inplane, inplane])
 
         interp_acq_vol, nlflow_tfm_dict = nl_deformation_flow_3d(
             acq_vol,
@@ -417,6 +437,7 @@ def nl_deformation_flow_nii(
             resolution=resolution,
             interpolation=interpolation,
             num_jobs=num_jobs,
+            axis=axis,
             clobber=clobber,
         )
 
@@ -440,6 +461,7 @@ def resample_interp_vol_to_resolution(
     interp_acq_orig_fin,
     interp_acq_iso_fin: str,
     resolution: float,
+    axis: int = DEFAULT_SECTION_AXIS,
     clobber: bool = False,
 ) -> np.array:
     """Resample the interpolated volume to the specified resolution.
@@ -454,19 +476,24 @@ def resample_interp_vol_to_resolution(
         interp_acq_img = nib.load(interp_acq_orig_fin)  # type:ignore[assignment]
         interp_acq_vol = interp_acq_img.get_fdata()
 
-        slice_thickness = interp_acq_img.affine[1, 1]
+        slice_thickness = get_affine_spacing(interp_acq_img.affine, axis)
 
-        y_new = int(np.round(interp_acq_vol.shape[1] / (resolution / slice_thickness)))
+        y_new = int(np.round(interp_acq_vol.shape[axis] / (resolution / slice_thickness)))
 
+        inplane = inplane_axes(axis, interp_acq_vol.ndim)
         interp_acq_vol = resize(
             interp_acq_vol,
-            (interp_acq_vol.shape[0], y_new, interp_acq_vol.shape[2]),
+            volume_shape(
+                (interp_acq_vol.shape[inplane[0]], interp_acq_vol.shape[inplane[1]]),
+                y_new,
+                axis,
+            ),
             order=1,
         )
 
         aff_iso = interp_acq_img.affine
 
-        aff_iso[1, 1] = resolution
+        aff_iso[axis, axis] = resolution
 
         nib.Nifti1Image(interp_acq_vol, aff_iso, direction_order="lpi").to_filename(
             interp_acq_iso_fin
@@ -478,6 +505,7 @@ def morphint(
     curr_output_dir: str,
     resolution: float,
     resolution_list: list = None,
+    axis: int = DEFAULT_SECTION_AXIS,
     tfm_dict: dict = None,
     interpolation: str = "Linear",
     rigid_alignment_flag:bool = False,
@@ -540,6 +568,7 @@ def morphint(
             ii_fin, 
             ii_rigid_fn, 
             rigid_output_dir,
+            axis=axis,
             clobber=clobber,
         )
         ii_fin = ii_rigid_fn 
@@ -559,6 +588,7 @@ def morphint(
             iterations_per_resolution=iterations_per_resolution,
             base_itr=base_ants_itr,
             n_resolutions=n_resolutions,
+            axis=axis,
             clobber=clobber,
         )
 
@@ -582,12 +612,13 @@ def morphint(
         resolution=resolution,
         interpolation=interpolation,
         num_jobs=num_jobs,
+        axis=axis,
         clobber=clobber,
     )
 
     print("Resampling", interp_iso_fin)
     resample_interp_vol_to_resolution(
-        interp_fin, interp_iso_fin, resolution, clobber=clobber
+        interp_fin, interp_iso_fin, resolution, axis=axis, clobber=clobber
     )
 
     return interp_iso_fin, nlflow_tfm_dict

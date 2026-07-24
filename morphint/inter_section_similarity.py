@@ -6,8 +6,16 @@ import numpy as np
 import ants
 from scipy.stats import kendalltau, pearsonr, spearmanr
 
-def inter_section_similarity(in_path, similarity_metric="kendalltau")-> tuple[float, float]:
-    """Calculate the Similarity correlation between each pair of adjacent coronal sections across axis 1.
+from brainbuilder.utils.axis_utils import (
+    DEFAULT_SECTION_AXIS,
+    get_section,
+    section_profile,
+)
+
+def inter_section_similarity(
+    in_path, similarity_metric="kendalltau", axis: int = DEFAULT_SECTION_AXIS
+) -> tuple[float, float]:
+    """Calculate the Similarity correlation between each pair of adjacent sections across the sectioning axis.
         First, read in the .nii.gz using ants and then identify the valid sections (those with non-zero pixels). 
         Then, for each pair of adjacent valid sections, calculate the similarity and 
         print the mean and standard deviation list of these correlations.
@@ -18,13 +26,13 @@ def inter_section_similarity(in_path, similarity_metric="kendalltau")-> tuple[fl
     data = img.numpy()
 
     # Identify valid sections (those with non-zero pixels)
-    valid_idx = np.where(np.sum(data, axis=(0, 2)) > 0)[0]
+    valid_idx = np.where(section_profile(data, axis, reduction=np.sum) > 0)[0]
 
     # Calculate similarity between adjacent valid sections
     correlations = []
     for i in range(len(valid_idx) - 1):
-        section1 = data[:, valid_idx[i], :]
-        section2 = data[:, valid_idx[i + 1], :]
+        section1 = get_section(data, valid_idx[i], axis)
+        section2 = get_section(data, valid_idx[i + 1], axis)
         if similarity_metric == "kendalltau":
             corr = kendalltau(section1.flatten(), section2.flatten())[0]
         elif similarity_metric == "pearson":
