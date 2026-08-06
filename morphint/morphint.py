@@ -608,6 +608,8 @@ def morphint(
     interp_iso_fin = f"{base_path}_interp-vol_iso.nii.gz"
     interp_fin = f"{base_path}_interp-vol_orig.nii.gz"
 
+
+    print(tfm_dict)
     nlflow_tfm_dict = nl_deformation_flow_nii(
         ii_fin,
         curr_output_dir,
