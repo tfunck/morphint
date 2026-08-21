@@ -374,7 +374,6 @@ def nl_deformation_flow_3d(
 
     for y_list, inter_images, _ in results:
         for y, image_path in zip(y_list, inter_images):
-            print(y, image_path)
             try:
                 set_section(
                     out_vol,
@@ -609,7 +608,6 @@ def morphint(
     interp_fin = f"{base_path}_interp-vol_orig.nii.gz"
 
 
-    print(tfm_dict)
     nlflow_tfm_dict = nl_deformation_flow_nii(
         ii_fin,
         curr_output_dir,
