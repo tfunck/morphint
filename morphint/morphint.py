@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+from glob import glob
 
 import ants
 import matplotlib.pyplot as plt
@@ -83,6 +84,24 @@ def scale_displacement_field(
     return output_filename
 
 
+def cleanup_flow_scratch(nl_flow_dir: str) -> None:
+    """Remove per-slice scratch files from nl_flow transform directories.
+
+    Deletes the interpolated slices (``flow_*``), endpoint sections (``sec_*``),
+    scaled displacement fields (``scaled_*``) and the ANTs resampled-moving
+    byproduct (``*_cls_rsl.nii.gz``) once they have been assembled into the
+    interpolated volume. The forward/inverse warp pairs are kept because the
+    segmentation (cls) pass reuses them via ``tfm_dict``.
+    """
+    patterns = ("flow_*.nii.gz", "sec_*.nii.gz", "scaled_*.nii.gz", "*_cls_rsl.nii.gz")
+
+    for tfm_dir in glob(f"{nl_flow_dir}/tfm_*"):
+        for pattern in patterns:
+            for path in glob(f"{tfm_dir}/{pattern}"):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
 
 
 def nl_deformation_flow(
@@ -96,6 +115,7 @@ def nl_deformation_flow(
     resolution_list: list = [4, 2, 1, 0.5],
     resolution: float = 0.5,
     interpolation: str = "Linear",
+    cleanup: bool = True,
     clobber: bool = False,
 ):
     """Use ANTs to calculate SyN alignment between two sections. Let the deformation field = D.
@@ -221,6 +241,16 @@ def nl_deformation_flow(
             # Save the output image (atomic to avoid partial reads under parallelism)
             _atomic_ants_image_write(output_image, output_image_path)
 
+            # The scaled fields are one-shot scratch consumed by the
+            # apply_transforms calls for this slice only; left on disk they
+            # account for ~80% of the nl_flow footprint.
+            if cleanup:
+                for scratch_path in (scaled_fwd_tfm_path, scaled_inv_tfm_path):
+                    try:
+                        os.remove(scratch_path)
+                    except FileNotFoundError:
+                        pass
+
         qc_png = f"{qc_dir}/qc_flow_{y}.png"
 
         if not os.path.exists(qc_png) and False:
@@ -263,6 +293,7 @@ def process_section(
     interpolation: str = "Linear",
     axis: int = DEFAULT_SECTION_AXIS,
     verbose: bool = False,
+    cleanup: bool = True,
     clobber: bool = False,
 ):
     """Process a pair of sections and compute the deformation flow."""
@@ -306,6 +337,7 @@ def process_section(
         resolution_list=resolution_list,
         resolution=resolution,
         interpolation=interpolation,
+        cleanup=cleanup,
         clobber=clobber,
     )
 
@@ -322,6 +354,7 @@ def nl_deformation_flow_3d(
     num_jobs: int = -1,
     axis: int = DEFAULT_SECTION_AXIS,
     verbose: bool = False,
+    cleanup: bool = True,
     clobber: bool = False,
 ):
     """Apply  nl intersection_flow to a volume where there are missing sections along the sectioning axis"""
@@ -364,6 +397,7 @@ def nl_deformation_flow_3d(
                 resolution=resolution,
                 interpolation=interpolation,
                 axis=axis,
+                cleanup=cleanup,
                 clobber=clobber,
             )
             for y0, y1 in zip(valid_idx[:-1], valid_idx[1:])
@@ -397,6 +431,7 @@ def nl_deformation_flow_nii(
     interpolation: str = "Linear",
     num_jobs: int = -1,
     axis: int = DEFAULT_SECTION_AXIS,
+    cleanup: bool = True,
     clobber: bool = False,
 ):
     nlflow_tfm_json = interp_acq_fin.replace(".nii.gz", "") + "nlflow_tfm.json"
@@ -442,6 +477,7 @@ def nl_deformation_flow_nii(
             interpolation=interpolation,
             num_jobs=num_jobs,
             axis=axis,
+            cleanup=cleanup,
             clobber=clobber,
         )
 
@@ -453,6 +489,12 @@ def nl_deformation_flow_nii(
         # Save nlflow_tfm_dict to json
         with open(nlflow_tfm_json, "w") as f:
             json.dump(nlflow_tfm_dict, f)
+
+        # The per-slice flow/section/scaled files are now assembled into
+        # interp_acq_fin; only the warp pairs recorded in nlflow_tfm_dict are
+        # still needed (reused by the cls pass).
+        if cleanup:
+            cleanup_flow_scratch(output_dir + "/nl_flow/")
 
     else:
         with open(nlflow_tfm_json, "r") as f:
@@ -519,6 +561,7 @@ def morphint(
     iterations_per_resolution: int = 4,
     relax: float = 0.9,
     num_jobs: int = -1,
+    cleanup: bool = True,
     clobber: bool = False,
 ):
     """Apply non-linear deformation flow to the input volume and resample it to the specified resolution.
@@ -546,6 +589,11 @@ def morphint(
         Number of iterations to perform at each resolution level during the refinement step. The default is 4.
     relax : float, optional
         Relaxation factor to use during the refinement step. The default is 0.9.    
+    cleanup : bool, optional
+        If True, delete intermediate scratch files once they are no longer
+        needed: the per-slice scaled displacement fields, flow slices, endpoint
+        sections and the full-resolution interp-vol_orig volume. Set to False
+        to keep all intermediate outputs. The default is True.
     clobber : bool, optional
         If True, overwrite existing files. The default is False.
 
@@ -607,6 +655,29 @@ def morphint(
     interp_iso_fin = f"{base_path}_interp-vol_iso.nii.gz"
     interp_fin = f"{base_path}_interp-vol_orig.nii.gz"
 
+    # Same naming convention as nl_deformation_flow_nii.
+    nlflow_tfm_json = interp_fin.replace(".nii.gz", "") + "nlflow_tfm.json"
+
+    # When cleanup is enabled interp_fin is deleted once the iso volume is
+    # written (it is only consumed by the resample below and is the largest
+    # single file in the output tree), so resumption is gated on the iso
+    # volume + transform json instead.
+    if (
+        os.path.exists(interp_iso_fin)
+        and os.path.exists(nlflow_tfm_json)
+        and not clobber
+    ):
+        with open(nlflow_tfm_json, "r") as f:
+            nlflow_tfm_dict = json.load(f)
+
+        if cleanup:
+            # Remove a stale orig volume left behind by a run predating its deletion.
+            try:
+                os.remove(interp_fin)
+            except FileNotFoundError:
+                pass
+
+        return interp_iso_fin, nlflow_tfm_dict
 
     nlflow_tfm_dict = nl_deformation_flow_nii(
         ii_fin,
@@ -618,6 +689,7 @@ def morphint(
         interpolation=interpolation,
         num_jobs=num_jobs,
         axis=axis,
+        cleanup=cleanup,
         clobber=clobber,
     )
 
@@ -625,5 +697,11 @@ def morphint(
     resample_interp_vol_to_resolution(
         interp_fin, interp_iso_fin, resolution, axis=axis, clobber=clobber
     )
+
+    if cleanup:
+        try:
+            os.remove(interp_fin)
+        except FileNotFoundError:
+            pass
 
     return interp_iso_fin, nlflow_tfm_dict
