@@ -1,5 +1,8 @@
+import logging
 import os
 import subprocess
+
+logger = logging.getLogger("morphint")
 
 def compute_ants_alignment(
     prefixdir: str,
@@ -67,7 +70,7 @@ def compute_ants_alignment(
             subprocess.run(cmd, shell=True, executable="/bin/bash")
 
         except RuntimeError as e:
-            print("Error in registration:", e)
+            logger.error(f"Error in registration: {e}")
 
 
     assert os.path.exists(fwd_tfm_path), f"Error: output does not exist {fwd_tfm_path}"

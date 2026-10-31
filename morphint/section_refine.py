@@ -85,6 +85,9 @@ from brainbuilder.utils.axis_utils import (
     section_profile,
     set_section,
 )
+from brainbuilder.utils.utils import get_logger, single_threaded_itk
+
+logger = get_logger("morphint")
 
 
 # ---------------------------------------------------------------------------
@@ -693,32 +696,34 @@ def refine_volume(
         # subsequent iterations need fresh registrations.
         cache_for_iter = seed_cache if it == 0 else {}
 
-        num_jobs = 1
-        results = Parallel(n_jobs=num_jobs)(
-            delayed(_refine_one_section)(
-                y_m=y_m,
-                y_p=y_p,
-                y_n=y_n,
-                section_orig=get_section(vol, y_m, axis),
-                mid_resampled_path=snapshot_paths[y_m],
-                prev_resampled_path=snapshot_paths[y_p],
-                next_resampled_path=snapshot_paths[y_n],
-                cumulative_warp_path=snapshot_cumulative[y_m],
-                iter_dir=iter_dir,
-                pair_warp_dir=os.path.join(pair_warp_dir, f"iter_{it}_{curr_resolution}mm"),
-                origin=origin,
-                spacing=spacing,
-                relax=relax,
-                resolution_list=list(resolution_list),
-                resolution=curr_resolution,
-                cached_pair_warps=cache_for_iter,
-                clobber=clobber,
-                base_itr=base_itr,
-                refinement_type=refinement_type,
-                iteration_index=it,
+        with single_threaded_itk():
+            results = Parallel(n_jobs=num_jobs)(
+                delayed(_refine_one_section)(
+                    y_m=y_m,
+                    y_p=y_p,
+                    y_n=y_n,
+                    section_orig=get_section(vol, y_m, axis),
+                    mid_resampled_path=snapshot_paths[y_m],
+                    prev_resampled_path=snapshot_paths[y_p],
+                    next_resampled_path=snapshot_paths[y_n],
+                    cumulative_warp_path=snapshot_cumulative[y_m],
+                    iter_dir=iter_dir,
+                    pair_warp_dir=os.path.join(
+                        pair_warp_dir, f"iter_{it}_{curr_resolution}mm"
+                    ),
+                    origin=origin,
+                    spacing=spacing,
+                    relax=relax,
+                    resolution_list=list(resolution_list),
+                    resolution=curr_resolution,
+                    cached_pair_warps=cache_for_iter,
+                    clobber=clobber,
+                    base_itr=base_itr,
+                    refinement_type=refinement_type,
+                    iteration_index=it,
+                )
+                for (y_p, y_m, y_n) in triples
             )
-            for (y_p, y_m, y_n) in triples
-        )
 
         # Promote results into the live state.
         latest_pair_warps = {}
@@ -805,7 +810,7 @@ def refine_nii(
     mean_sim_orig = np.mean(correlations_orig)
     mean_sim_refined = np.mean(correlations_refined)
 
-    print(f"Improvement: {mean_sim_refined - mean_sim_orig:.3f} (mean)")
+    logger.info(f"Improvement: {mean_sim_refined - mean_sim_orig:.3f} (mean)")
 
     return tfm_dict_out, {'correlations_orig': correlations_orig, 'correlations_refined': correlations_refined}
 

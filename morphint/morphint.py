@@ -23,6 +23,9 @@ from brainbuilder.utils.axis_utils import (
     set_section,
     volume_shape,
 )
+from brainbuilder.utils.utils import get_logger, single_threaded_itk
+
+logger = get_logger("morphint")
 
 try:
     # Preferred when `morphint` is imported as a proper package.
@@ -114,11 +117,6 @@ def nl_deformation_flow(
     Returns:
         None
     """
-    # Reduce ITK/ANTs internal threading per worker to avoid oversubscription/segfaults under Parallel.
-    try:
-        ants.set_num_threads(1)
-    except Exception:
-        pass
 
     qc_dir = f"{output_dir}/qc"
 
@@ -267,16 +265,16 @@ def process_section(
 ):
     """Process a pair of sections and compute the deformation flow."""
     if verbose :
-        print("\t>>> Processing sections:", y0, y1)
+        logger.info(f"\t>>> Processing sections: {y0} {y1}")
     if fwd_tfm_path is not None:
         assert os.path.exists(fwd_tfm_path)
         if verbose:
-            print("Using fwd_tfm_path:", fwd_tfm_path)
+            logger.info(f"Using fwd_tfm_path: {fwd_tfm_path}")
 
     if inv_tfm_path is not None:
         assert os.path.exists(inv_tfm_path)
         if verbose:
-            print("Using inv_tfm_path:", inv_tfm_path)
+            logger.info(f"Using inv_tfm_path: {inv_tfm_path}")
 
     # IMPORTANT: do NOT write these endpoint slice files into a shared directory.
     # Parallel jobs share endpoints (e.g. one gap's y1 is the next gap's y0),
@@ -349,7 +347,8 @@ def nl_deformation_flow_3d(
         num_jobs = max(1, num_jobs // 2)
 
     # Cap OpenMP/BLAS/ITK threadpools inside each worker to avoid native crashes.
-    with parallel_backend("loky", inner_max_num_threads=1):
+    # `inner_max_num_threads` misses ITK, which reads its own env var.
+    with single_threaded_itk(), parallel_backend("loky", inner_max_num_threads=1):
         results = Parallel(n_jobs=num_jobs, backend="loky", prefer="processes")(
             delayed(process_section)(
                 y0,
@@ -621,7 +620,7 @@ def morphint(
         clobber=clobber,
     )
 
-    print("Resampling", interp_iso_fin)
+    logger.info(f"Resampling {interp_iso_fin}")
     resample_interp_vol_to_resolution(
         interp_fin, interp_iso_fin, resolution, axis=axis, clobber=clobber
     )

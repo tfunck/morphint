@@ -11,6 +11,9 @@ from brainbuilder.utils.axis_utils import (
     get_section,
     section_profile,
 )
+from brainbuilder.utils.utils import get_logger
+
+logger = get_logger("morphint")
 
 def inter_section_similarity(
     in_path, similarity_metric="kendalltau", axis: int = DEFAULT_SECTION_AXIS
@@ -44,7 +47,7 @@ def inter_section_similarity(
     # Print mean and standard deviation of correlations
     mean_corr = np.mean(correlations)
     std_corr = np.std(correlations)
-    print(f"Similarity ({similarity_metric}): {mean_corr:.3f} +/- {std_corr:.3f}")
+    logger.info(f"Similarity ({similarity_metric}): {mean_corr:.3f} +/- {std_corr:.3f}")
 
 
 
