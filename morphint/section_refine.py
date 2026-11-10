@@ -606,7 +606,7 @@ def refine_volume(
     spacing: tuple,
     axis: int = DEFAULT_SECTION_AXIS,
     relax: float = 0.5,
-    resolution_list: list = (4, 2, 1, 0),
+    resolution_list: list = (4, 2, 1, 0.5),
     num_jobs: int = -1,
     tfm_dict: Optional[dict] = None,
     base_itr: int = 30,
