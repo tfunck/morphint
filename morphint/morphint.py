@@ -555,6 +555,7 @@ def morphint(
     interpolation: str = "Linear",
     rigid_alignment_flag:bool = False,
     refine_2d_alignment_flag: bool = False,
+    intersection_fill_flag: bool = True,
     base_ants_itr: int = 10,
     n_resolutions: int = 3,
     iterations_per_resolution: int = 4,
@@ -645,62 +646,65 @@ def morphint(
 
         ii_fin = ii_refined_fn
 
-    # Remove .nii.gz or .nii extension and add appropriate suffix
-    if '.nii' in ii_fin:
-        base_path = ii_fin.replace('.nii.gz', '').replace('.nii', '')
-    else : # in case there is another file type that might be supported by nibabel
-        base_path = os.path.splitext(ii_fin)[0] 
 
-    interp_iso_fin = f"{base_path}_interp-vol_iso.nii.gz"
-    interp_fin = f"{base_path}_interp-vol_orig.nii.gz"
+    if intersection_fill_flag :
+        # Remove .nii.gz or .nii extension and add appropriate suffix
+        if '.nii' in ii_fin:
+            base_path = ii_fin.replace('.nii.gz', '').replace('.nii', '')
+        else : # in case there is another file type that might be supported by nibabel
+            base_path = os.path.splitext(ii_fin)[0] 
 
-    # Same naming convention as nl_deformation_flow_nii.
-    nlflow_tfm_json = interp_fin.replace(".nii.gz", "") + "nlflow_tfm.json"
+        interp_iso_fin = f"{base_path}_interp-vol_iso.nii.gz"
+        interp_fin = f"{base_path}_interp-vol_orig.nii.gz"
 
-    # When cleanup is enabled interp_fin is deleted once the iso volume is
-    # written (it is only consumed by the resample below and is the largest
-    # single file in the output tree), so resumption is gated on the iso
-    # volume + transform json instead.
-    if (
-        os.path.exists(interp_iso_fin)
-        and os.path.exists(nlflow_tfm_json)
-        and not clobber
-    ):
-        with open(nlflow_tfm_json, "r") as f:
-            nlflow_tfm_dict = json.load(f)
+        # Same naming convention as nl_deformation_flow_nii.
+        nlflow_tfm_json = interp_fin.replace(".nii.gz", "") + "nlflow_tfm.json"
+
+        # When cleanup is enabled interp_fin is deleted once the iso volume is
+        # written (it is only consumed by the resample below and is the largest
+        # single file in the output tree), so resumption is gated on the iso
+        # volume + transform json instead.
+        if (
+            os.path.exists(interp_iso_fin)
+            and os.path.exists(nlflow_tfm_json)
+            and not clobber
+        ):
+            with open(nlflow_tfm_json, "r") as f:
+                nlflow_tfm_dict = json.load(f)
+
+            if cleanup:
+                # Remove a stale orig volume left behind by a run predating its deletion.
+                try:
+                    os.remove(interp_fin)
+                except FileNotFoundError:
+                    pass
+
+            return interp_iso_fin, nlflow_tfm_dict
+
+        nlflow_tfm_dict = nl_deformation_flow_nii(
+            ii_fin,
+            curr_output_dir,
+            interp_fin,
+            tfm_dict=tfm_dict,
+            resolution_list=resolution_list,
+            resolution=resolution,
+            interpolation=interpolation,
+            num_jobs=num_jobs,
+            axis=axis,
+            cleanup=cleanup,
+            clobber=clobber,
+        )
+
+        logger.info(f"Resampling {interp_iso_fin}")
+        resample_interp_vol_to_resolution(
+            interp_fin, interp_iso_fin, resolution, axis=axis, clobber=clobber
+        )
 
         if cleanup:
-            # Remove a stale orig volume left behind by a run predating its deletion.
             try:
                 os.remove(interp_fin)
             except FileNotFoundError:
                 pass
 
         return interp_iso_fin, nlflow_tfm_dict
-
-    nlflow_tfm_dict = nl_deformation_flow_nii(
-        ii_fin,
-        curr_output_dir,
-        interp_fin,
-        tfm_dict=tfm_dict,
-        resolution_list=resolution_list,
-        resolution=resolution,
-        interpolation=interpolation,
-        num_jobs=num_jobs,
-        axis=axis,
-        cleanup=cleanup,
-        clobber=clobber,
-    )
-
-    logger.info(f"Resampling {interp_iso_fin}")
-    resample_interp_vol_to_resolution(
-        interp_fin, interp_iso_fin, resolution, axis=axis, clobber=clobber
-    )
-
-    if cleanup:
-        try:
-            os.remove(interp_fin)
-        except FileNotFoundError:
-            pass
-
-    return interp_iso_fin, nlflow_tfm_dict
+    return None, None
