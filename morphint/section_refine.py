@@ -94,6 +94,33 @@ logger = get_logger("morphint")
 # Small helpers
 # ---------------------------------------------------------------------------
 
+def _resample_warp_to_grid(
+    warp: "ants.ANTsImage", reference: "ants.ANTsImage"
+) -> "ants.ANTsImage":
+    """Resample a 2-D displacement field onto ``reference``'s grid.
+
+    ``ants.resample_image_to_target`` segfaults on multi-component (vector)
+    images in some ANTs builds, so we resample each displacement component
+    independently with a plain linear interpolation on the numpy array. The
+    displacement values are physical (mm) and therefore grid-independent, so
+    only the sampling grid changes -- the vectors themselves are interpolated,
+    not rescaled.
+    """
+    from scipy.ndimage import zoom
+
+    arr = warp.numpy()  # (H, W, n_components)
+    th, tw = reference.shape
+    factors = (th / arr.shape[0], tw / arr.shape[1]) + (1,) * (arr.ndim - 2)
+    resampled = zoom(arr, factors, order=1).astype(np.float32)
+    return ants.from_numpy(
+        resampled,
+        origin=reference.origin,
+        spacing=reference.spacing,
+        direction=reference.direction,
+        has_components=True,
+    )
+
+
 def _slice_to_ants(
     arr2d: np.ndarray,
     origin: tuple,
@@ -230,6 +257,7 @@ def _compute_midway_refinement(
         resolution_list: list,
         resolution: float,
         cached_pair_warps: dict,
+        max_resolution: float = None,
         base_itr: int = 30,
         clobber: bool = False,
 ):
@@ -250,6 +278,7 @@ def _compute_midway_refinement(
         ymin=y_p, ymax=y_m,
         fwd_tfm_path=fwd_pm, inv_tfm_path=inv_pm,
         resolution_list=resolution_list, resolution=resolution,
+        max_resolution=max_resolution,
         base_itr=base_itr,
         clobber=clobber,
     )
@@ -266,6 +295,7 @@ def _compute_midway_refinement(
         fwd_tfm_path=fwd_mn, inv_tfm_path=inv_mn,
         base_itr=base_itr,
         resolution_list=resolution_list, resolution=resolution,
+        max_resolution=max_resolution,
         clobber=clobber,
     )
     out.pair_warps[mn_key] = (fwd_mn, inv_mn)
@@ -295,6 +325,7 @@ def _compute_forward_backward_refinement(
         resolution: float,
         cached_pair_warps: dict,
         iteration_index: int = 1,
+        max_resolution: float = None,
         clobber: bool = False,
     ):
     # Single-neighbour registration; sweep direction alternates by
@@ -326,6 +357,7 @@ def _compute_forward_backward_refinement(
         ymax=max(y_m, y_neighbour),
         fwd_tfm_path=fwd, inv_tfm_path=inv,
         resolution_list=resolution_list, resolution=resolution,
+        max_resolution=max_resolution,
         clobber=clobber,
     )
     out.pair_warps[pair_key] = (fwd, inv)
@@ -374,6 +406,7 @@ def _refine_one_section(
     refinement_type: str = "midway",
     iteration_index: int = 1,
     base_itr: int = 30,
+    max_resolution: float = None,
 ) -> _SectionResult:
     """Refine a single interior section.
 
@@ -454,6 +487,7 @@ def _refine_one_section(
                 resolution_list,
                 resolution,
                 cached_pair_warps,
+                max_resolution=max_resolution,
                 base_itr=base_itr,
                 clobber=clobber,
         )
@@ -473,6 +507,7 @@ def _refine_one_section(
                 resolution,
                 cached_pair_warps,
                 iteration_index=iteration_index,
+                max_resolution=max_resolution,
                 clobber=clobber,
         )
     else:
@@ -496,11 +531,12 @@ def _refine_one_section(
         W_old = ants.image_read(cumulative_warp_path)
         delta = ants.image_read(delta_path)
         if W_old.shape != delta.shape:
-            # Shapes will differ if the template grid changed between iters.
-            # Resample W_old onto delta's grid before adding.
-            W_old = ants.resample_image_to_target(
-                W_old, delta, interp_type="linear"
-            )
+            # The registration grid changes between iterations when the
+            # coarse-to-fine schedule emits warps at a shrunk resolution.
+            # Resample W_old onto delta's grid before adding. (ANTs'
+            # resample_image_to_target segfaults on vector images in some
+            # builds, so use a component-wise numpy resample.)
+            W_old = _resample_warp_to_grid(W_old, delta)
         W_new = W_old + delta
         ants.image_write(W_new, new_warp_path)
     else:
@@ -570,7 +606,7 @@ def refine_volume(
     spacing: tuple,
     axis: int = DEFAULT_SECTION_AXIS,
     relax: float = 0.5,
-    resolution_list: list = (4, 2, 1, 0.5),
+    resolution_list: list = (4, 2, 1, 0),
     num_jobs: int = -1,
     tfm_dict: Optional[dict] = None,
     base_itr: int = 30,
@@ -627,6 +663,12 @@ def refine_volume(
         pair-warp cache.
     """
     out_vol = vol.copy()
+
+    # AntsParams builds its shrink/smoothing schedule assuming the resolution
+    # list runs coarsest -> finest. A list in the wrong order collapses the
+    # multi-resolution schedule (every level ends up at shrink=1 / smooth=0, or
+    # worse, a shrink factor of 0), so normalize defensively here.
+    resolution_list = sorted(resolution_list, reverse=True)
 
     valid_idx = np.where(section_profile(vol, axis, reduction=np.max) > 0)[0]
     if len(valid_idx) == 0:
@@ -715,12 +757,13 @@ def refine_volume(
                     spacing=spacing,
                     relax=relax,
                     resolution_list=list(resolution_list),
-                    resolution=curr_resolution,
+                    resolution=min(resolution_list),
+                    max_resolution=curr_resolution,
                     cached_pair_warps=cache_for_iter,
                     clobber=clobber,
                     base_itr=base_itr,
                     refinement_type=refinement_type,
-                    iteration_index=it,
+                    iteration_index=it + 1,
                 )
                 for (y_p, y_m, y_n) in triples
             )
@@ -839,7 +882,7 @@ def section_refine(
         Path to the refined NIfTI and the pair-warp dict.
     """
     if resolution_list is None:
-        resolution_list = [resolution * i for i in range(1, n_resolutions + 1)]
+        resolution_list = [resolution * i for i in range(n_resolutions, 0, -1)]
 
     tfm_dict_out, corr_dict_out = refine_nii(
         in_fin=in_fin,

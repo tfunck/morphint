@@ -15,6 +15,7 @@ def compute_ants_alignment(
     resolution_list: list = [4, 2, 1, 0.5],
     resolution: float = 0.5,
     base_itr: int = 30,
+    max_resolution: float = None,
     clobber: bool = False,
 ):
     """Compute the ANTs alignment between two sections and save the forward and inverse transforms.
@@ -25,8 +26,9 @@ def compute_ants_alignment(
         sec1_path (str): Path to the second section.
         ymin (int): Minimum y-coordinate of the section.
         ymax (int): Maximum y-coordinate of the section.
-        resolution_list (list): List of resolutions for multi-resolution registration.
-        resolution (float): Final resolution for the registration.
+        resolution_list (list): List of resolutions for multi-resolution registration, ordered coarsest to finest.
+        resolution (float): Native resolution of the input sections (the finest entry in ``resolution_list``). Used as the denominator when computing shrink factors.
+        max_resolution (float, optional): Coarsest resolution to stop the multi-resolution schedule at. When provided, levels finer than ``resolution`` but coarser than ``max_resolution`` are dropped, so the registration runs coarse-to-fine only down to ``max_resolution`` (e.g. a genuinely coarse single level for early refinement iterations). Defaults to ``resolution`` (full schedule).
         clobber (bool): If True, overwrite existing files.
 
     Returns:
@@ -57,7 +59,7 @@ def compute_ants_alignment(
 
         from brainbuilder.utils.utils import AntsParams
 
-        nlParams = AntsParams(resolution_list, resolution, base_itr)
+        nlParams = AntsParams(resolution_list, resolution, base_itr, max_resolution=max_resolution)
 
         try:
             cmd = "antsRegistration --verbose 0 --dimensionality 2 --float 0 --collapse-output-transforms 1"
