@@ -640,6 +640,8 @@ def morphint(
             iterations_per_resolution=iterations_per_resolution,
             base_itr=base_ants_itr,
             n_resolutions=n_resolutions,
+            resolution=resolution,
+            num_jobs=num_jobs,
             axis=axis,
             clobber=clobber,
         )

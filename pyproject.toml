@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "morphint"
-version = "0.2"
+version = "0.3.1"
 description = "Interpolation of 3D brain volume from 2D sections"
 authors = ["Thomas Funck <thomas.funck@childmind.org>"]
 license = "LGPL-2.1"
